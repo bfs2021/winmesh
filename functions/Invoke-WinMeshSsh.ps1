@@ -91,6 +91,37 @@ try {
 "@
 }
 
+# Resolves one host's ssh settings against the defaults. Shared by the ssh and
+# scp argument builders so the two can never drift apart: a file copied to a host
+# must go over the same port, as the same user, with the same options as a
+# command run on it.
+function Get-WinMeshSshSetting {
+    param(
+        [Parameter(Mandatory)] $HostEntry,
+        [Parameter(Mandatory)] $Defaults
+    )
+
+    $port    = if ($HostEntry.SshPort)    { $HostEntry.SshPort }    else { $Defaults.SshPort }
+    $user    = if ($HostEntry.SshUser)    { $HostEntry.SshUser }    else { $Defaults.SshUser }
+    $shell   = if ($HostEntry.SshShell)   { $HostEntry.SshShell }   else { $Defaults.SshShell }
+    $timeout = if ($HostEntry.SshTimeout) { $HostEntry.SshTimeout } else { $Defaults.SshTimeout }
+    # A host's SshOptions replace the defaults rather than add to them, which is
+    # why a host with its own key lists IdentityFile itself. An empty list is a
+    # deliberate "inject nothing", so test for $null, not for emptiness.
+    $extra   = @(if ($null -ne $HostEntry.SshOptions) { $HostEntry.SshOptions } else { $Defaults.SshOptions })
+
+    [pscustomobject]@{
+        Port    = $port
+        User    = $user
+        Shell   = $shell
+        Timeout = $timeout
+        Options = $extra
+        # With no user the target is the bare address, so an entry whose Address
+        # is a Host block in ~/.ssh/config keeps that block's own User.
+        Target  = if ($user) { "$user@$($HostEntry.Address)" } else { "$($HostEntry.Address)" }
+    }
+}
+
 # Assembles the ssh argument vector for one host entry.
 function New-WinMeshSshArgs {
     param(
@@ -99,19 +130,35 @@ function New-WinMeshSshArgs {
         [Parameter(Mandatory)] [string]$RemoteCommand
     )
 
-    $port    = if ($HostEntry.SshPort)    { $HostEntry.SshPort }    else { $Defaults.SshPort }
-    $user    = if ($HostEntry.SshUser)    { $HostEntry.SshUser }    else { $Defaults.SshUser }
-    $shell   = if ($HostEntry.SshShell)   { $HostEntry.SshShell }   else { $Defaults.SshShell }
-    $timeout = if ($HostEntry.SshTimeout) { $HostEntry.SshTimeout } else { $Defaults.SshTimeout }
-    $extra   = @(if ($null -ne $HostEntry.SshOptions) { $HostEntry.SshOptions } else { $Defaults.SshOptions })
+    $s = Get-WinMeshSshSetting -HostEntry $HostEntry -Defaults $Defaults
 
-    $target = if ($user) { "$user@$($HostEntry.Address)" } else { $HostEntry.Address }
+    $a = @('-o', 'BatchMode=yes', '-o', "ConnectTimeout=$($s.Timeout)")
+    if ($s.Port -and $s.Port -ne 22) { $a += @('-p', "$($s.Port)") }
+    foreach ($o in $s.Options) { if ($o) { $a += @('-o', "$o") } }
+    $a += $s.Target
+    $a += "$($s.Shell) -NoProfile -NonInteractive -EncodedCommand $RemoteCommand"
+    , $a
+}
 
-    $a = @('-o', 'BatchMode=yes', '-o', "ConnectTimeout=$timeout")
-    if ($port -and $port -ne 22) { $a += @('-p', "$port") }
-    foreach ($o in $extra) { if ($o) { $a += @('-o', "$o") } }
-    $a += $target
-    $a += "$shell -NoProfile -NonInteractive -EncodedCommand $RemoteCommand"
+# Assembles the scp argument vector. Same settings, different flag for the port:
+# scp spells it -P, ssh spells it -p. They are not interchangeable and the
+# mistake is silent until the connection is refused.
+function New-WinMeshScpArgs {
+    param(
+        [Parameter(Mandatory)] $HostEntry,
+        [Parameter(Mandatory)] $Defaults,
+        [Parameter(Mandatory)] [string]$Source,
+        [Parameter(Mandatory)] [string]$Destination,
+        [switch]$Recurse
+    )
+
+    $s = Get-WinMeshSshSetting -HostEntry $HostEntry -Defaults $Defaults
+
+    $a = @('-o', 'BatchMode=yes', '-o', "ConnectTimeout=$($s.Timeout)")
+    if ($s.Port -and $s.Port -ne 22) { $a += @('-P', "$($s.Port)") }
+    foreach ($o in $s.Options) { if ($o) { $a += @('-o', "$o") } }
+    if ($Recurse) { $a += '-r' }
+    $a += @($Source, $Destination)
     , $a
 }
 

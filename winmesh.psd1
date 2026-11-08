@@ -12,6 +12,7 @@
         'Register-WinMeshCredential',
         'Connect-WinMeshHost',
         'Invoke-WinMeshCommand',
+        'Copy-WinMeshItem',
         'Test-WinMeshHost',
         'Test-WinMeshFleet',
         'New-WinMeshBootstrap',
