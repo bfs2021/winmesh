@@ -46,8 +46,14 @@
     That object's RunId - the form that works after the session which started
     the job is gone.
 .PARAMETER Force
-    Kill a live process whose start time could not be read. It does not, and
-    cannot, override a start time that was read and did not match.
+    Kill a live process whose start time could not be read, or was never
+    recorded. It does not, and cannot, override a start time that was read and
+    did not match.
+.PARAMETER GraceSeconds
+    How long to wait between SIGTERM and SIGKILL on a Linux or macOS target. It
+    has no effect on Windows: there is no portable signal a console PowerShell
+    process would act on, so the Windows stop is `taskkill /T /F`, which is
+    immediate, and the wait there only confirms the process is gone.
 .EXAMPLE
     Stop-WinMeshProcess workstation-01 -RunId 7f3a19c2b40e
 .EXAMPLE
@@ -60,7 +66,10 @@ function Stop-WinMeshProcess {
         [Parameter(Mandatory, Position = 1, ParameterSetName = 'Process')] [object]$Process,
         [Parameter(Mandatory, Position = 1, ParameterSetName = 'RunId')] [string]$RunId,
         [Parameter(Mandatory, ParameterSetName = 'Explicit')] [int]$ProcessId,
-        [Parameter(ParameterSetName = 'Explicit')] [object]$StartUtc,
+        # Mandatory here, unlike on Get-WinMeshProcess: reading about a process is
+        # harmless, killing one is not, and without a start time this command has
+        # nothing to identify the job with.
+        [Parameter(Mandatory, ParameterSetName = 'Explicit')] [object]$StartUtc,
         [Parameter(ParameterSetName = 'Explicit')] [string]$DonePath,
         [Parameter(ParameterSetName = 'Explicit')] [string]$StdoutPath,
         [int]$GraceSeconds = 5,
@@ -114,7 +123,10 @@ function Stop-WinMeshProcess {
         return $result
     }
 
-    if ($state.Reason -match 'start times could not be compared' -and -not $Force) {
+    # Both of Get-WinMeshProcess's uncertain answers, not only the first:
+    # 'start times could not be compared' and 'no start time on either side'
+    # mean the same thing here - the pid was not identified as this job.
+    if ($state.Reason -match 'could not be compared|no start time' -and -not $Force) {
         throw "winmesh($Name): pid $($state.ProcessId) is alive but its start time could not be read, so this may not be the job. Pass -Force to kill it anyway."
     }
 
