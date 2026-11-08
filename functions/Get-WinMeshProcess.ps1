@@ -22,19 +22,29 @@
     Machine name from the config.
 .PARAMETER Process
     The object Start-WinMeshProcess returned.
+.PARAMETER RunId
+    Instead of -Process: the RunId Start-WinMeshProcess returned. Everything else
+    is read from the files the job left on the target next to itself, so one
+    twelve-character string survives the end of the session that started the
+    work. This is the form to use from a script, a scheduled job or anything
+    whose memory does not outlive the run.
 .PARAMETER ProcessId
-    Instead of -Process: the pid, with the paths given separately.
+    Instead of -Process or -RunId: the pid, with the paths given separately.
 .PARAMETER Tail
     Also return the last N lines of the output file.
 .EXAMPLE
     $job = Start-WinMeshProcess workstation-01 { ninja -C C:/src/build }
     Get-WinMeshProcess workstation-01 -Process $job -Tail 20
+.EXAMPLE
+    # the same job from a later session, with only the run id written down
+    Get-WinMeshProcess workstation-01 -RunId 7f3a19c2b40e -Tail 20
 #>
 function Get-WinMeshProcess {
     [CmdletBinding(DefaultParameterSetName = 'Process')]
     param(
         [Parameter(Mandatory, Position = 0)] [string]$Name,
         [Parameter(Mandatory, Position = 1, ParameterSetName = 'Process')] [object]$Process,
+        [Parameter(Mandatory, Position = 1, ParameterSetName = 'RunId')] [string]$RunId,
         [Parameter(Mandatory, ParameterSetName = 'Explicit')] [int]$ProcessId,
         [Parameter(ParameterSetName = 'Explicit')] [string]$DonePath,
         [Parameter(ParameterSetName = 'Explicit')] [string]$StdoutPath,
@@ -50,6 +60,14 @@ function Get-WinMeshProcess {
         throw "Host '$Name' uses the '$($h.Transport)' transport. Get-WinMeshProcess is ssh only."
     }
 
+    $byRunId = ''
+    if ($PSCmdlet.ParameterSetName -eq 'RunId') {
+        if ($RunId -notmatch '^[0-9a-fA-F]{4,64}$') {
+            throw "RunId '$RunId' does not look like one: Start-WinMeshProcess returns twelve hex characters."
+        }
+        $byRunId = $RunId
+        $ProcessId = 0
+    }
     if ($PSCmdlet.ParameterSetName -eq 'Process') {
         if (-not $Process.ProcessId) {
             throw "-Process needs the object Start-WinMeshProcess returned (it has ProcessId, DonePath and StdoutPath)."
@@ -61,9 +79,35 @@ function Get-WinMeshProcess {
     }
 
     $r = Invoke-WinMeshSsh -HostEntry $h -Defaults $Config.Defaults -ArgumentList @(
-        $ProcessId, $StartUtc, $DonePath, $StdoutPath, $Tail
+        $ProcessId, $StartUtc, $DonePath, $StdoutPath, $Tail, $byRunId
     ) -ScriptBlock {
-        param($procId, $startUtc, $donePath, $outPath, $tail)
+        param($procId, $startUtc, $donePath, $outPath, $tail, $runId)
+
+        # Asked by run id: recover the pid and the paths from what the job left
+        # beside itself. The meta file is written at launch, the pid file by the
+        # job's own first act, so the pid file wins where they disagree.
+        if ($runId) {
+            $base = Join-Path ([IO.Path]::GetTempPath()) "winmesh-$runId"
+            $metaPath = "$base.meta"
+            if (-not (Test-Path -LiteralPath $metaPath -PathType Leaf)) {
+                throw "no job with run id '$runId' on this machine: $metaPath does not exist. The temp directory may have been cleaned, or the job ran as a different user."
+            }
+            foreach ($line in [IO.File]::ReadAllLines($metaPath)) {
+                $kv = "$line".Split('=', 2)
+                if ($kv.Count -ne 2) { continue }
+                switch ($kv[0]) {
+                    'pid'   { $n = 0; if ([int]::TryParse($kv[1], [ref]$n)) { $procId = $n } }
+                    'out'   { $outPath = $kv[1] }
+                    'done'  { $donePath = $kv[1] }
+                    'start' { if ($kv[1]) { $startUtc = [datetime]::Parse($kv[1], [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) } }
+                }
+            }
+            $pidPath = "$base.pid"
+            if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
+                $n = 0
+                if ([int]::TryParse(([IO.File]::ReadAllText($pidPath)).Trim(), [ref]$n) -and $n -gt 0) { $procId = $n }
+            }
+        }
 
         $alive  = $false
         $reason = ''
@@ -114,6 +158,9 @@ function Get-WinMeshProcess {
         }
 
         [pscustomobject]@{
+            ProcessId    = $procId
+            DonePath     = $donePath
+            StdoutPath   = $outPath
             Alive        = $alive
             Finished     = $finished
             ExitCode     = $exitCode
@@ -126,12 +173,13 @@ function Get-WinMeshProcess {
 
     [pscustomobject]@{
         Host         = $Name
-        ProcessId    = $ProcessId
+        RunId        = $byRunId
+        ProcessId    = $r.ProcessId
         Alive        = $r.Alive
         Finished     = $r.Finished
         ExitCode     = $r.ExitCode
         Reason       = $r.Reason
-        StdoutPath   = $StdoutPath
+        StdoutPath   = $r.StdoutPath
         StdoutBytes  = $r.StdoutBytes
         LastWriteUtc = $r.LastWriteUtc
         Tail         = $r.Tail

@@ -407,6 +407,14 @@ $s.Tail             # the last lines of the output file
 
 Three states are distinguishable, and the third is the one elapsed time cannot tell you: `Alive` with no `Finished` is still working; `Finished` carries `ExitCode`; neither means the job was killed or died without writing a result. Both commands are ssh only.
 
+The one thing worth writing down is `$job.RunId`. A caller whose session ends — a script that exits, a scheduled job, an agent whose context is replaced — comes back with that string alone:
+
+```powershell
+Get-WinMeshProcess workstation-01 -RunId 7f3a19c2b40e -Tail 20
+```
+
+The pid, the output path and the completion path are recorded on the target beside the job, under `winmesh-<id>` in its temp directory, so they are read from there rather than from the caller's memory.
+
 **Use a different config file** (e.g. staging vs production):
 
 ```powershell
@@ -604,7 +612,7 @@ Parameters, as defined in the code (`functions/`):
 | `Invoke-WinMeshCommand` | `-Name` (position 0), `-ScriptBlock` (position 1), `-ArgumentList`, `-Config` (a config object from `Get-WinMeshConfig`), `-ThrowOnNativeExit` |
 | `Copy-WinMeshItem` | `-Name` (position 0), `-Path` (position 1), `-Destination` (position 2), `-FromHost`, `-Recurse`, `-Config`, `-WhatIf` |
 | `Start-WinMeshProcess` | `-Name` (position 0), `-ScriptBlock` (position 1), `-ArgumentList`, `-WorkingDirectory`, `-StdoutPath`, `-Config`, `-WhatIf` |
-| `Get-WinMeshProcess` | `-Name` (position 0), and either `-Process` (position 1, the object `Start-WinMeshProcess` returned) or `-ProcessId` with `-DonePath`, `-StdoutPath`, `-StartUtc`; plus `-Tail`, `-Config` |
+| `Get-WinMeshProcess` | `-Name` (position 0), and one of: `-Process` (position 1, the object `Start-WinMeshProcess` returned), `-RunId` (position 1, that object's `RunId` — everything else is read from the target), or `-ProcessId` with `-DonePath`, `-StdoutPath`, `-StartUtc`; plus `-Tail`, `-Config` |
 | `Test-WinMeshHost` | `-Name` (position 0), `-Config`, `-Quiet` |
 | `Test-WinMeshFleet` | `-Config`, `-Quiet` |
 | `New-WinMeshBootstrap` | `-AllowedSubnets`, `-OutFile`, and `-Name` (accepted as a label, but it does not change the generated script) |
@@ -721,6 +729,7 @@ Collected from real debugging — each one cost time:
 - **TrustedHosts is required even in a domain** when connecting by IP: Kerberos does not apply, so auth falls back to NTLM.
 - **Scripts are UTF-8 with BOM.** Without the BOM, Windows PowerShell 5.1 reads non-ASCII as ANSI and fails to parse the file.
 
+- **An exit code of 0 from a tool that declined to work is not a failure anything can see.** A build tool that prints "no work to do" and exits 0 has told you nothing about whether it built what you changed; `-ThrowOnNativeExit` will not catch it, and neither will reading the code yourself. Verify by the artifact — the binary's timestamp, the row in the table, the file on disk.
 - **A failed native command is silent by default.** PowerShell does not turn a non-zero exit into a terminating error, so a remote build that failed returns like one that worked. Over ssh, `-ThrowOnNativeExit` makes it fail locally; everywhere else, check `$LASTEXITCODE` inside the block yourself.
 - **`$LASTEXITCODE` must be read on the very next line.** Any command in between overwrites it, including a diagnostic you added to see what was happening.
 - **A transfer's exit code is not proof the file arrived whole.** `scp` has been seen reporting success on a partial file; `Copy-WinMeshItem` therefore reads the size back from the destination.
@@ -856,6 +865,7 @@ winmesh is at version 0.3.0. It is a small module meant to stay readable in one 
 - **Results are deserialized objects** over both transports (data, not live objects).
 - **`-ThrowOnNativeExit` reports the last native command's code, not "did anything fail".** `cmd /c "exit 7"; cmd /c "exit 0"` leaves 0, and a block with no native command never throws. It is ssh only: on the WinRM path the caller's scriptblock goes straight to `Invoke-Command`, which is what makes `$using:` work there, and wrapping it to read the exit code would take that away. A WinRM host refuses the switch with that reason.
 - **`Copy-WinMeshItem` verifies one file's size, not a tree.** With `-Recurse` nothing is verified beyond `scp`'s own exit code. It also needs an scp-capable server: an overlay VPN's embedded SSH server may answer on port 22 and serve shell sessions only — `Test-WinMeshHost` prints the banner, which says which server answered. Its WinRM half is the README's old PSSession recipe and has not been run from a Windows controller.
+- **On a Windows target the detached job's shell is resolved by the WMI service, not by the ssh session.** A `SshShell` of `powershell`, or a `pwsh` in the system PATH, works; a per-user `pwsh` may not be found. Give such a host the full path in `SshShell`. Not tested here: the fleet used for verification has `powershell` in the system PATH.
 - **`Start-WinMeshProcess` leaves files on the target.** The generated job script, its arguments, the output file and the completion file stay in the target's temp directory under a `winmesh-<id>` prefix; nothing cleans them up. There is no job registry on the controller either: the caller keeps the returned object, or the pid and the two paths.
 - **A detached job's liveness is a pid plus a start time.** If the recorded start time could not be read (a job that finished before it was asked), `Alive` falls back to the pid alone and says so in `Reason`. Killing a job is `Stop-Process` through `Invoke-WinMeshCommand`; there is no `Stop-WinMeshProcess`.
 - **SSH is non-interactive** (`BatchMode=yes`) and does not manage keys, passwords or host-key policy; use `SshOptions` and `~/.ssh/config` for that.

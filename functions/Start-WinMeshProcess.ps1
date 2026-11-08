@@ -27,6 +27,16 @@
     with no done file died rather than finished, and that is reported as such -
     a state the one-shot path cannot even express.
 
+    The returned RunId is the only thing worth keeping. A caller whose session
+    ends - a script that exits, an agent whose context is replaced - can come
+    back with `Get-WinMeshProcess -RunId <id>` and nothing else: the pid, the
+    output path and the completion path are all recorded on the target next to
+    the job, under `winmesh-<id>`.
+
+    On a Windows target the shell is resolved by the WMI service, not by the ssh
+    session, so a `SshShell` of 'powershell' or a pwsh in the system PATH works
+    while a per-user pwsh may not. Give such a host the full path in SshShell.
+
     ssh transport only. The WinRM path has no equivalent here and refuses with
     that message rather than pretending.
 .PARAMETER Name
@@ -148,7 +158,7 @@ try {
             if ($workDir) { $cimArgs['CurrentDirectory'] = $workDir }
             $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments $cimArgs
             if ($r.ReturnValue -ne 0) {
-                throw "Win32_Process.Create returned $($r.ReturnValue) (2 = access denied, 3 = insufficient privilege, 9 = path not found, 21 = invalid parameter; a CurrentDirectory on a mapped drive letter shows up here)."
+                throw "Win32_Process.Create returned $($r.ReturnValue) (2 = access denied, 3 = insufficient privilege, 9 = path not found, 21 = invalid parameter; a CurrentDirectory the WMI service cannot see shows up here)."
             }
             $procId = [int]$r.ProcessId
         } else {
@@ -186,23 +196,36 @@ try {
             # evidence, which is what Get-WinMeshProcess falls back to.
         }
 
+        # Everything a later session needs to find this job again from the run
+        # id alone. The caller's object lives in one process; this file does not.
+        $meta = @(
+            "pid=$procId"
+            "out=$outPath"
+            "done=$donePath"
+            "start=$(if ($startUtc) { $startUtc.ToString('o') } else { '' })"
+        ) -join "`n"
+        [IO.File]::WriteAllText("$base.meta", $meta)
+
         [pscustomobject]@{
             ProcessId    = $procId
             StartUtc     = $startUtc
             StdoutPath   = $outPath
             DonePath     = $donePath
             ScriptPath   = $userPath
+            MetaPath     = "$base.meta"
             Os           = if ($win) { 'Windows' } else { 'Unix' }
         }
     }
 
     [pscustomobject]@{
         Host        = $Name
+        RunId       = $runId
         ProcessId   = $started.ProcessId
         StartUtc    = $started.StartUtc
         StdoutPath  = $started.StdoutPath
         DonePath    = $started.DonePath
         ScriptPath  = $started.ScriptPath
+        MetaPath    = $started.MetaPath
         Os          = $started.Os
     }
 }
