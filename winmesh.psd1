@@ -15,6 +15,7 @@
         'Copy-WinMeshItem',
         'Start-WinMeshProcess',
         'Get-WinMeshProcess',
+        'Stop-WinMeshProcess',
         'Test-WinMeshHost',
         'Test-WinMeshFleet',
         'New-WinMeshBootstrap',

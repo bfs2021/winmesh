@@ -441,6 +441,10 @@ implements:
    there and nobody loses a feature.
 2. **P4** — **wanted**, and built: `Start-WinMeshProcess` and
    `Get-WinMeshProcess`.
+3. Later the same day, the question P4 left open (#19): a detached job is
+   stopped with `Stop-WinMeshProcess` rather than by a hand-written
+   `Stop-Process`, because the hand-written one gets a recycled pid and a Unix
+   process group silently wrong.
 
 What is still open from this document: **P3** (`-ScriptFile`) is issue #13, and
 **P5**'s two documentation changes are issues #14 and #15. Work this release

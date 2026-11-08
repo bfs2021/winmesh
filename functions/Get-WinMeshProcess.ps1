@@ -18,6 +18,10 @@
       * alive, no done file         - still working;
       * not alive, done file        - finished, ExitCode is its exit code;
       * not alive, no done file     - killed or died; nothing wrote a result.
+
+    A job stopped with Stop-WinMeshProcess is the third state, with StoppedUtc
+    set and Reason naming the time and the signal, so "I stopped it" does not
+    read like "it crashed".
 .PARAMETER Name
     Machine name from the config.
 .PARAMETER Process
@@ -134,6 +138,22 @@ function Get-WinMeshProcess {
             }
         }
 
+        # Written by Stop-WinMeshProcess. Not a completion record: it exists so a
+        # job that was stopped on purpose is not reported like one that crashed.
+        $stoppedUtc = $null
+        $stoppedBy  = ''
+        $stoppedPath = if ($donePath) { [regex]::Replace("$donePath", '\.done$', '.stopped') } else { '' }
+        if ($stoppedPath -and (Test-Path -LiteralPath $stoppedPath -PathType Leaf)) {
+            foreach ($line in [IO.File]::ReadAllLines($stoppedPath)) {
+                $kv = "$line".Split('=', 2)
+                if ($kv.Count -ne 2) { continue }
+                if ($kv[0] -eq 'stopped' -and $kv[1]) {
+                    try { $stoppedUtc = [datetime]::Parse($kv[1], [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) } catch { }
+                }
+                if ($kv[0] -eq 'method') { $stoppedBy = $kv[1] }
+            }
+        }
+
         $exitCode = $null
         $finished = $false
         if ($donePath -and (Test-Path -LiteralPath $donePath -PathType Leaf)) {
@@ -144,7 +164,11 @@ function Get-WinMeshProcess {
         }
 
         if (-not $alive -and -not $finished -and -not $reason) {
-            $reason = 'the process is gone and wrote no exit code: it was killed or died'
+            $reason = if ($stoppedUtc) {
+                "stopped by Stop-WinMeshProcess at $($stoppedUtc.ToString('u'))$(if ($stoppedBy) { " ($stoppedBy)" })"
+            } else {
+                'the process is gone and wrote no exit code: it was killed or died'
+            }
         }
 
         $bytes = $null
@@ -159,6 +183,7 @@ function Get-WinMeshProcess {
 
         [pscustomobject]@{
             ProcessId    = $procId
+            StoppedUtc   = $stoppedUtc
             DonePath     = $donePath
             StdoutPath   = $outPath
             Alive        = $alive
@@ -178,7 +203,9 @@ function Get-WinMeshProcess {
         Alive        = $r.Alive
         Finished     = $r.Finished
         ExitCode     = $r.ExitCode
+        StoppedUtc   = $r.StoppedUtc
         Reason       = $r.Reason
+        DonePath     = $r.DonePath
         StdoutPath   = $r.StdoutPath
         StdoutBytes  = $r.StdoutBytes
         LastWriteUtc = $r.LastWriteUtc

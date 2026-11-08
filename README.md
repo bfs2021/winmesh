@@ -23,7 +23,7 @@ Test-WinMeshFleet                                             # check every host
 
 winmesh is a small PowerShell module for linking Windows machines over PowerShell Remoting **or SSH**. You describe your machines once in a config file; after that you name a host, run commands on it, and get real objects back. The controller and the targets can be Windows, Linux or macOS: WinRM between Windows machines, SSH everywhere — see [Platforms](#platforms).
 
-The module has twelve commands. Seven run things, move things and check things (`Invoke-WinMeshCommand`, `Copy-WinMeshItem`, `Start-WinMeshProcess`, `Get-WinMeshProcess`, `Test-WinMeshHost`, `Test-WinMeshFleet`, `Get-WinMeshConfig`), three prepare the WinRM path (`New-WinMeshBootstrap` for the target, `Register-WinMeshCredential` and `Connect-WinMeshHost` for the controller) and two show and change which networks may reach a host's WinRM port (`Get-`/`Set-WinMeshFirewallScope`). Two optional standalone scripts install an SSH server on a Windows or Linux target. There are no agents and no dependencies beyond PowerShell and, for SSH, an `ssh` client.
+The module has thirteen commands. Eight run things, move things and check things (`Invoke-WinMeshCommand`, `Copy-WinMeshItem`, `Start-WinMeshProcess`, `Get-WinMeshProcess`, `Stop-WinMeshProcess`, `Test-WinMeshHost`, `Test-WinMeshFleet`, `Get-WinMeshConfig`), three prepare the WinRM path (`New-WinMeshBootstrap` for the target, `Register-WinMeshCredential` and `Connect-WinMeshHost` for the controller) and two show and change which networks may reach a host's WinRM port (`Get-`/`Set-WinMeshFirewallScope`). Two optional standalone scripts install an SSH server on a Windows or Linux target. There are no agents and no dependencies beyond PowerShell and, for SSH, an `ssh` client.
 
 It is a small pre-1.0 module (version 0.3.0) built for a few machines, not for large fleets or configuration management, and the repository has no automated test suite — checks are manual, described in [CONTRIBUTING.md](CONTRIBUTING.md). See [Status and known limits](#status-and-known-limits).
 
@@ -93,7 +93,7 @@ Everything listed here is implemented in this repository. The one forward-lookin
 ### Moving files and running long work
 
 - **`Copy-WinMeshItem`.** Copy a file to or from a named host, over `scp` on the ssh transport and a PSSession on WinRM, and have the size read back from the destination so a truncated transfer is an error rather than a success. → [Usage examples](#usage-examples)
-- **`Start-WinMeshProcess` / `Get-WinMeshProcess`.** Start work that outlives the connection and ask about it later: still running, how it ended, and the last lines of its output. Completion is proven by a file the job writes as its last act, so "killed" and "finished" are different answers. *ssh only.* → [Usage examples](#usage-examples)
+- **`Start-WinMeshProcess` / `Get-WinMeshProcess` / `Stop-WinMeshProcess`.** Start work that outlives the connection, ask about it later (still running, how it ended, the last lines of its output), and stop it. Completion is proven by a file the job writes as its last act, so "killed", "stopped on purpose" and "finished" are three different answers. Stopping identifies the job before it kills anything and refuses a pid that is no longer this job. *ssh only.* → [Usage examples](#usage-examples)
 
 ### Checking health
 
@@ -415,6 +415,18 @@ Get-WinMeshProcess workstation-01 -RunId 7f3a19c2b40e -Tail 20
 
 The pid, the output path and the completion path are recorded on the target beside the job, under `winmesh-<id>` in its temp directory, so they are read from there rather than from the caller's memory.
 
+**Stop it.** The same identification happens first, which is the point:
+
+```powershell
+Stop-WinMeshProcess workstation-01 -RunId 7f3a19c2b40e
+# WasAlive Stopped Method                          Reason
+# True     True    SIGTERM to process group 7327
+```
+
+A pid whose recorded start time does not match the process holding it now is **not** killed, and `-Force` does not override that — it is a different process, and the error says so and names the explicit way to kill it if that is really what you meant. A pid that is alive but whose start time could not be read needs `-Force`. A job that already finished is not an error: nothing is stopped and the result says `already finished with exit code 0`.
+
+On Windows the stop is `taskkill /T /F`, which takes the process tree still attached to the job; on Linux and macOS it is SIGTERM to the job's process group — read from `ps` at stop time rather than assumed — then SIGKILL to the same group if it is still there after a few seconds. The result says which one ended it. No completion file is written, because a stopped job genuinely has no exit code; a stop record is written instead, so a later `Get-WinMeshProcess` reports *stopped by Stop-WinMeshProcess at …* rather than *killed or died*.
+
 **Use a different config file** (e.g. staging vs production):
 
 ```powershell
@@ -598,7 +610,7 @@ the machine, and its address must fall inside `AllowedSubnets`.
 | `Test-WinMeshHost` / `Test-WinMeshFleet` | check the channel | controller | no |
 | `Invoke-WinMeshCommand` | run a command on a host; `-ThrowOnNativeExit` makes a failed native command fail locally — *ssh only* | controller | no |
 | `Copy-WinMeshItem` | copy a file to or from a host, size verified at the destination | controller | no |
-| `Start-WinMeshProcess` / `Get-WinMeshProcess` | start work that outlives the connection; ask whether it is alive, how it ended, and its last output lines — *ssh only* | controller | no |
+| `Start-WinMeshProcess` / `Get-WinMeshProcess` / `Stop-WinMeshProcess` | start work that outlives the connection; ask whether it is alive, how it ended, and its last output lines; stop it, with the job identified before anything is killed — *ssh only* | controller | no |
 | `New-WinMeshBootstrap` | generate the target-prep script | controller | no |
 | `Get-WinMeshFirewallScope` / `Set-WinMeshFirewallScope` | show / re-apply which networks may reach WinRM — *winrm only* | controller (acts on the target over WinRM) | no on the controller; the account used on the target must be allowed to change firewall rules |
 | *(bootstrap on target)* | enable WinRM, narrow the port — *winrm only* | **target** | **yes** |
@@ -613,6 +625,7 @@ Parameters, as defined in the code (`functions/`):
 | `Copy-WinMeshItem` | `-Name` (position 0), `-Path` (position 1), `-Destination` (position 2), `-FromHost`, `-Recurse`, `-Config`, `-WhatIf` |
 | `Start-WinMeshProcess` | `-Name` (position 0), `-ScriptBlock` (position 1), `-ArgumentList`, `-WorkingDirectory`, `-StdoutPath`, `-Config`, `-WhatIf` |
 | `Get-WinMeshProcess` | `-Name` (position 0), and one of: `-Process` (position 1, the object `Start-WinMeshProcess` returned), `-RunId` (position 1, that object's `RunId` — everything else is read from the target), or `-ProcessId` with `-DonePath`, `-StdoutPath`, `-StartUtc`; plus `-Tail`, `-Config` |
+| `Stop-WinMeshProcess` | `-Name` (position 0), and one of `-Process` / `-RunId` (position 1) / `-ProcessId` with `-StartUtc`, `-DonePath`, `-StdoutPath`; plus `-GraceSeconds` (default 5, Unix only), `-Force`, `-Config`, `-WhatIf` |
 | `Test-WinMeshHost` | `-Name` (position 0), `-Config`, `-Quiet` |
 | `Test-WinMeshFleet` | `-Config`, `-Quiet` |
 | `New-WinMeshBootstrap` | `-AllowedSubnets`, `-OutFile`, and `-Name` (accepted as a label, but it does not change the generated script) |
@@ -867,7 +880,8 @@ winmesh is at version 0.3.0. It is a small module meant to stay readable in one 
 - **`Copy-WinMeshItem` verifies one file's size, not a tree.** With `-Recurse` nothing is verified beyond `scp`'s own exit code. It also needs an scp-capable server: an overlay VPN's embedded SSH server may answer on port 22 and serve shell sessions only — `Test-WinMeshHost` prints the banner, which says which server answered. Its WinRM half is the README's old PSSession recipe and has not been run from a Windows controller.
 - **On a Windows target the detached job's shell is resolved by the WMI service, not by the ssh session.** A `SshShell` of `powershell`, or a `pwsh` in the system PATH, works; a per-user `pwsh` may not be found. Give such a host the full path in `SshShell`. Not tested here: the fleet used for verification has `powershell` in the system PATH.
 - **`Start-WinMeshProcess` leaves files on the target.** The generated job script, its arguments, the output file and the completion file stay in the target's temp directory under a `winmesh-<id>` prefix; nothing cleans them up. There is no job registry on the controller either: the caller keeps the returned object, or the pid and the two paths.
-- **A detached job's liveness is a pid plus a start time.** If the recorded start time could not be read (a job that finished before it was asked), `Alive` falls back to the pid alone and says so in `Reason`. Killing a job is `Stop-Process` through `Invoke-WinMeshCommand`; there is no `Stop-WinMeshProcess`.
+- **A detached job's liveness is a pid plus a start time.** If the recorded start time could not be read (a job that finished before it was asked), `Alive` falls back to the pid alone and says so in `Reason`, and `Stop-WinMeshProcess` then needs `-Force`.
+- **A stop takes what is still attached to the job.** On Windows that is the process tree (`taskkill /T /F`); a child whose own parent exited first is no longer in it and survives — measured, and the job in that case has usually finished normally anyway. On Linux and macOS it is the process group, which the job leads because it was started with `setsid`. Nothing stops a process that detached itself from both.
 - **SSH is non-interactive** (`BatchMode=yes`) and does not manage keys, passwords or host-key policy; use `SshOptions` and `~/.ssh/config` for that.
 - **The firewall-scope guard is IPv4 only.** The lock-out check compares live WinRM sources with the new ranges as IPv4 CIDRs, and `Get-WinMeshFirewallScope` compares scopes by network prefix — a light check, not an exact comparison.
 - **The firewall rules touched are all enabled inbound rules whose local port is 5985**, on the target.
