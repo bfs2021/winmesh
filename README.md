@@ -76,7 +76,7 @@ People who run a handful of machines — workstations, a NAS, lab boxes, a few L
 
 ## What's inside
 
-Everything listed here is implemented in this repository; the repository labels nothing as experimental or planned. Items marked **WinRM only** need a Windows controller and a WinRM host.
+Everything listed here is implemented in this repository. The only forward-looking document is [the 0.3 spec](docs/spec-agent-ergonomics-0.3.md), a proposal for non-interactive callers; nothing in it is built. Items marked **WinRM only** need a Windows controller and a WinRM host.
 
 ### Addressing and configuration
 
@@ -827,6 +827,7 @@ winmesh is at version 0.2.1. It is a small module meant to stay readable in one 
 | This README | the whole module: concepts, setup, usage, SSH transport, subnets, security, commands, config, gotchas, troubleshooting |
 | [docs/ssh-server-setup.md](docs/ssh-server-setup.md) | the optional Windows (Win32-OpenSSH) and Linux SSH-server installers, flags, firewall behaviour and verification |
 | [config/hosts.example.psd1](config/hosts.example.psd1) | annotated config template, including ZeroTier, LAN, SSH and Linux examples |
+| [docs/spec-agent-ergonomics-0.3.md](docs/spec-agent-ergonomics-0.3.md) | **proposal, not built:** what a non-interactive caller (script, CI job, agent) needs — native exit codes, file transfer, `-ScriptFile`, detached runs — with the measurements behind each |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | scope, coding conventions (each prevents a bug already hit), manual testing, commit rules |
 | `functions/` | one file per command (plus the platform and ssh helpers); `Invoke-WinMeshSsh.ps1` holds the ssh transport internals |
 | `scripts/windows/`, `scripts/linux/` | the standalone SSH-server installers |
