@@ -11,7 +11,7 @@
   <a href="https://learn.microsoft.com/powershell/"><img alt="PowerShell 5.1+ | 7" src="https://img.shields.io/badge/PowerShell-5.1%2B%20%7C%207-5391FE.svg?logo=powershell&logoColor=white"></a>
   <a href="#platforms"><img alt="Platform: Windows | Linux | macOS" src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6.svg"></a>
   <a href="https://learn.microsoft.com/windows/win32/winrm/portal"><img alt="Transport: WinRM | SSH" src="https://img.shields.io/badge/Transport-WinRM%20%7C%20SSH-2E7D57.svg"></a>
-  <a href="winmesh.psd1"><img alt="Version" src="https://img.shields.io/badge/version-0.2.1-blue.svg"></a>
+  <a href="winmesh.psd1"><img alt="Version" src="https://img.shields.io/badge/version-0.3.0-blue.svg"></a>
 </p>
 
 <p align="center"><b>English</b> | <a href="README.ru.md">Русский</a></p>
@@ -23,9 +23,9 @@ Test-WinMeshFleet                                             # check every host
 
 winmesh is a small PowerShell module for linking Windows machines over PowerShell Remoting **or SSH**. You describe your machines once in a config file; after that you name a host, run commands on it, and get real objects back. The controller and the targets can be Windows, Linux or macOS: WinRM between Windows machines, SSH everywhere — see [Platforms](#platforms).
 
-The module has nine commands. Four run things and check things (`Invoke-WinMeshCommand`, `Test-WinMeshHost`, `Test-WinMeshFleet`, `Get-WinMeshConfig`), three prepare the WinRM path (`New-WinMeshBootstrap` for the target, `Register-WinMeshCredential` and `Connect-WinMeshHost` for the controller) and two show and change which networks may reach a host's WinRM port (`Get-`/`Set-WinMeshFirewallScope`). Two optional standalone scripts install an SSH server on a Windows or Linux target. There are no agents and no dependencies beyond PowerShell and, for SSH, an `ssh` client.
+The module has twelve commands. Seven run things, move things and check things (`Invoke-WinMeshCommand`, `Copy-WinMeshItem`, `Start-WinMeshProcess`, `Get-WinMeshProcess`, `Test-WinMeshHost`, `Test-WinMeshFleet`, `Get-WinMeshConfig`), three prepare the WinRM path (`New-WinMeshBootstrap` for the target, `Register-WinMeshCredential` and `Connect-WinMeshHost` for the controller) and two show and change which networks may reach a host's WinRM port (`Get-`/`Set-WinMeshFirewallScope`). Two optional standalone scripts install an SSH server on a Windows or Linux target. There are no agents and no dependencies beyond PowerShell and, for SSH, an `ssh` client.
 
-It is a small pre-1.0 module (version 0.2.1) built for a few machines, not for large fleets or configuration management, and the repository has no automated test suite — checks are manual, described in [CONTRIBUTING.md](CONTRIBUTING.md). See [Status and known limits](#status-and-known-limits).
+It is a small pre-1.0 module (version 0.3.0) built for a few machines, not for large fleets or configuration management, and the repository has no automated test suite — checks are manual, described in [CONTRIBUTING.md](CONTRIBUTING.md). See [Status and known limits](#status-and-known-limits).
 
 **Contents:** [In plain words](#in-plain-words) · [What's inside](#whats-inside) · [How it works](#how-it-works) · [Quick start](#quick-start) · [Prerequisites](#prerequisites) · [Platforms](#platforms) · [Setup, step by step](#setup--step-by-step) · [Usage examples](#usage-examples) · [Over SSH](#over-ssh-instead-of-winrm) · [Allowed subnets and firewall scope](#choosing-allowed-subnets) · [Security notes](#security-notes) · [Commands](#commands) · [Config reference](#config-reference) · [What it does not do](#what-it-deliberately-does-not-do) · [Gotchas](#gotchas-baked-in) · [Troubleshooting](#troubleshooting) · [Status](#status-and-known-limits) · [Docs map](#documentation-map)
 
@@ -76,7 +76,7 @@ People who run a handful of machines — workstations, a NAS, lab boxes, a few L
 
 ## What's inside
 
-Everything listed here is implemented in this repository. The only forward-looking document is [the 0.3 spec](docs/spec-agent-ergonomics-0.3.md), a proposal for non-interactive callers; nothing in it is built. Items marked **WinRM only** need a Windows controller and a WinRM host.
+Everything listed here is implemented in this repository. The one forward-looking document is [the 0.3 spec](docs/spec-agent-ergonomics-0.3.md), which records what a non-interactive caller needs; its exit-code, file-transfer and detached-run items are built and in this list, the rest is still a proposal. Items marked **WinRM only** need a Windows controller and a WinRM host.
 
 ### Addressing and configuration
 
@@ -86,8 +86,14 @@ Everything listed here is implemented in this repository. The only forward-looki
 ### Running commands
 
 - **`Invoke-WinMeshCommand`.** Run a scriptblock on a named host, with `-ArgumentList`, and get objects back. → [Usage examples](#usage-examples)
+- **A failing native command can be made to fail locally.** `-ThrowOnNativeExit` raises an error when the last native command in the block exited non-zero — without it such a failure is silent, because PowerShell does not turn a non-zero exit into a terminating error. *ssh only.* → [Usage examples](#usage-examples)
 - **Two interchangeable transports.** `winrm` (default) uses `Invoke-Command` with a stored credential; `ssh` uses the system `ssh` client with the payload packed as one base64 token and the result serialized with the same CliXml engine remoting uses. → [Over SSH](#over-ssh-instead-of-winrm)
 - **Mixed fleets.** Windows, Linux and macOS hosts in one config; SSH works in every direction. → [Platforms](#platforms)
+
+### Moving files and running long work
+
+- **`Copy-WinMeshItem`.** Copy a file to or from a named host, over `scp` on the ssh transport and a PSSession on WinRM, and have the size read back from the destination so a truncated transfer is an error rather than a success. → [Usage examples](#usage-examples)
+- **`Start-WinMeshProcess` / `Get-WinMeshProcess`.** Start work that outlives the connection and ask about it later: still running, how it ended, and the last lines of its output. Completion is proven by a file the job writes as its last act, so "killed" and "finished" are different answers. *ssh only.* → [Usage examples](#usage-examples)
 
 ### Checking health
 
@@ -325,6 +331,15 @@ Invoke-WinMeshCommand workstation-01 { Get-Service } |
     Measure-Object
 ```
 
+**Fail when the remote command fails.** Without `-ThrowOnNativeExit` a failed build returns like a success: PowerShell does not turn a non-zero exit into a terminating error, so nothing throws and the caller's `$LASTEXITCODE` stays 0.
+
+```powershell
+Invoke-WinMeshCommand workstation-01 { ninja -C C:/src/build } -ThrowOnNativeExit
+# winmesh(ssh) 100.100.10.11: the last native command in the scriptblock exited with code 1.
+```
+
+It is the exit code of the *last* native command, not "did anything fail": `cmd /c "exit 7"; cmd /c "exit 0"` leaves 0. A block that ran no native command at all never throws. The switch is ssh only; on a WinRM host it is refused with that reason, because reading the code there would mean wrapping the caller's scriptblock and losing `$using:`.
+
 **Pass arguments in.** Use `param()` in the block and `-ArgumentList`:
 
 ```powershell
@@ -365,18 +380,32 @@ if ($down) {
 }
 ```
 
-**Copy files to or from a host.** File transfer needs a live session; open one with the stored credential:
+**Copy files to or from a host.** The same host name, either direction:
 
 ```powershell
-$cfg  = Get-WinMeshConfig
-$h    = $cfg.Hosts['workstation-01']
-$cred = Import-Clixml (Join-Path $cfg.Defaults.CredentialStore "$($h.Credential -replace '[^\w.@-]','_').cred.xml")
-
-$s = New-PSSession -ComputerName $h.Address -Credential $cred
-Copy-Item .\report.csv -Destination 'C:\Temp\' -ToSession $s
-Copy-Item 'C:\Temp\log.txt' -Destination .\ -FromSession $s
-Remove-PSSession $s
+Copy-WinMeshItem workstation-01 .\report.csv 'C:/Temp/'
+Copy-WinMeshItem workstation-01 'C:/Temp/log.txt' .\ -FromHost
+Copy-WinMeshItem workstation-01 .\site 'C:/inetpub/' -Recurse
 ```
+
+Over ssh this is `scp` with the host's own port, user and options; over WinRM it is a PSSession plus `Copy-Item -ToSession`/`-FromSession`. Either way the size is read back from the destination and a mismatch is an error naming both sizes, because a transfer that dies mid-file can still exit zero. The returned object carries `Bytes`, and `Ok`. The check is skipped for `-Recurse`, where one length means nothing.
+
+**Run something that outlives the connection.** A build or a measurement cannot be run through `Invoke-WinMeshCommand`: that call lives and dies with the ssh session and returns nothing until the command ends.
+
+```powershell
+$job = Start-WinMeshProcess workstation-01 { ninja -C C:/src/build } -WorkingDirectory 'C:/src'
+$job.ProcessId      # on the target
+$job.StdoutPath     # where its output is accumulating, on the target
+
+# later, in a new session, as often as you like:
+$s = Get-WinMeshProcess workstation-01 -Process $job -Tail 20
+$s.Alive            # from the process list, with the start time checked so a recycled pid is not mistaken for it
+$s.Finished         # from the file the job writes as its last act
+$s.ExitCode         # once Finished
+$s.Tail             # the last lines of the output file
+```
+
+Three states are distinguishable, and the third is the one elapsed time cannot tell you: `Alive` with no `Finished` is still working; `Finished` carries `ExitCode`; neither means the job was killed or died without writing a result. Both commands are ssh only.
 
 **Use a different config file** (e.g. staging vs production):
 
@@ -559,7 +588,9 @@ the machine, and its address must fall inside `AllowedSubnets`.
 | `Register-WinMeshCredential` | save a target's credentials (DPAPI) — *winrm only, Windows controller* | controller | no |
 | `Connect-WinMeshHost` | set up the client: WinRM + TrustedHosts — *winrm only, Windows controller* | controller | **yes** |
 | `Test-WinMeshHost` / `Test-WinMeshFleet` | check the channel | controller | no |
-| `Invoke-WinMeshCommand` | run a command on a host | controller | no |
+| `Invoke-WinMeshCommand` | run a command on a host; `-ThrowOnNativeExit` makes a failed native command fail locally — *ssh only* | controller | no |
+| `Copy-WinMeshItem` | copy a file to or from a host, size verified at the destination | controller | no |
+| `Start-WinMeshProcess` / `Get-WinMeshProcess` | start work that outlives the connection; ask whether it is alive, how it ended, and its last output lines — *ssh only* | controller | no |
 | `New-WinMeshBootstrap` | generate the target-prep script | controller | no |
 | `Get-WinMeshFirewallScope` / `Set-WinMeshFirewallScope` | show / re-apply which networks may reach WinRM — *winrm only* | controller (acts on the target over WinRM) | no on the controller; the account used on the target must be allowed to change firewall rules |
 | *(bootstrap on target)* | enable WinRM, narrow the port — *winrm only* | **target** | **yes** |
@@ -570,7 +601,10 @@ Parameters, as defined in the code (`functions/`):
 | Command | Parameters |
 |---|---|
 | `Get-WinMeshConfig` | `-Path` (default: `$env:WINMESH_CONFIG`, else `config/hosts.psd1` next to the module) |
-| `Invoke-WinMeshCommand` | `-Name` (position 0), `-ScriptBlock` (position 1), `-ArgumentList`, `-Config` (a config object from `Get-WinMeshConfig`) |
+| `Invoke-WinMeshCommand` | `-Name` (position 0), `-ScriptBlock` (position 1), `-ArgumentList`, `-Config` (a config object from `Get-WinMeshConfig`), `-ThrowOnNativeExit` |
+| `Copy-WinMeshItem` | `-Name` (position 0), `-Path` (position 1), `-Destination` (position 2), `-FromHost`, `-Recurse`, `-Config`, `-WhatIf` |
+| `Start-WinMeshProcess` | `-Name` (position 0), `-ScriptBlock` (position 1), `-ArgumentList`, `-WorkingDirectory`, `-StdoutPath`, `-Config`, `-WhatIf` |
+| `Get-WinMeshProcess` | `-Name` (position 0), and either `-Process` (position 1, the object `Start-WinMeshProcess` returned) or `-ProcessId` with `-DonePath`, `-StdoutPath`, `-StartUtc`; plus `-Tail`, `-Config` |
 | `Test-WinMeshHost` | `-Name` (position 0), `-Config`, `-Quiet` |
 | `Test-WinMeshFleet` | `-Config`, `-Quiet` |
 | `New-WinMeshBootstrap` | `-AllowedSubnets`, `-OutFile`, and `-Name` (accepted as a label, but it does not change the generated script) |
@@ -686,6 +720,12 @@ Collected from real debugging — each one cost time:
 - **`Enable-PSRemoting` opens the port with `RemoteAddress=Any`.** Narrowing it to trusted subnets is a mandatory step, built into the bootstrap. Skip it once and the port ends up wider open than you think.
 - **TrustedHosts is required even in a domain** when connecting by IP: Kerberos does not apply, so auth falls back to NTLM.
 - **Scripts are UTF-8 with BOM.** Without the BOM, Windows PowerShell 5.1 reads non-ASCII as ANSI and fails to parse the file.
+
+- **A failed native command is silent by default.** PowerShell does not turn a non-zero exit into a terminating error, so a remote build that failed returns like one that worked. Over ssh, `-ThrowOnNativeExit` makes it fail locally; everywhere else, check `$LASTEXITCODE` inside the block yourself.
+- **`$LASTEXITCODE` must be read on the very next line.** Any command in between overwrites it, including a diagnostic you added to see what was happening.
+- **A transfer's exit code is not proof the file arrived whole.** `scp` has been seen reporting success on a partial file; `Copy-WinMeshItem` therefore reads the size back from the destination.
+- **`scp` spells the port `-P`, `ssh` spells it `-p`.** The mistake is silent until the connection is refused.
+- **A backgrounded `setsid` does not always report the pid you want.** On a Unix target the launching shell's `$!` is `setsid`'s pid, which is the job only when `setsid` could call `setsid(2)` without forking. `Start-WinMeshProcess` therefore has the job write its own pid and prefers that file.
 
 Over SSH specifically:
 
@@ -807,13 +847,17 @@ Messages below are raised by the module itself or reported by `Test-WinMeshHost`
 
 ## Status and known limits
 
-winmesh is at version 0.2.1. It is a small module meant to stay readable in one sitting and dependency-free; it is installed by cloning the repository and importing the manifest (the repository documents no other installation route).
+winmesh is at version 0.3.0. It is a small module meant to stay readable in one sitting and dependency-free; it is installed by cloning the repository and importing the manifest (the repository documents no other installation route).
 
 - **No automated test suite.** `CONTRIBUTING.md` describes manual checks: a parse check of every `.ps1`/`.psd1`, `Test-ModuleManifest`, `-WhatIf` behaviour, a smoke test against a real host, and a way to exercise the ssh round trip without a second machine by shadowing `ssh` with a function.
 - **WinRM is HTTP on port 5985 only.** The module has no HTTPS (5986) handling. The channel is Negotiate/Kerberos-encrypted, but it is still an admin channel.
 - **WinRM needs Windows on both ends.** On a Linux/macOS controller the WinRM commands refuse with a clear message and the health checks report a failed `WinRM client` check.
 - **Sequential.** `Test-WinMeshFleet` checks hosts one after another, and `Invoke-WinMeshCommand` targets one host per call; to run something on every host, loop over the config yourself ([example](#usage-examples)).
 - **Results are deserialized objects** over both transports (data, not live objects).
+- **`-ThrowOnNativeExit` reports the last native command's code, not "did anything fail".** `cmd /c "exit 7"; cmd /c "exit 0"` leaves 0, and a block with no native command never throws. It is ssh only: on the WinRM path the caller's scriptblock goes straight to `Invoke-Command`, which is what makes `$using:` work there, and wrapping it to read the exit code would take that away. A WinRM host refuses the switch with that reason.
+- **`Copy-WinMeshItem` verifies one file's size, not a tree.** With `-Recurse` nothing is verified beyond `scp`'s own exit code. It also needs an scp-capable server: an overlay VPN's embedded SSH server may answer on port 22 and serve shell sessions only — `Test-WinMeshHost` prints the banner, which says which server answered. Its WinRM half is the README's old PSSession recipe and has not been run from a Windows controller.
+- **`Start-WinMeshProcess` leaves files on the target.** The generated job script, its arguments, the output file and the completion file stay in the target's temp directory under a `winmesh-<id>` prefix; nothing cleans them up. There is no job registry on the controller either: the caller keeps the returned object, or the pid and the two paths.
+- **A detached job's liveness is a pid plus a start time.** If the recorded start time could not be read (a job that finished before it was asked), `Alive` falls back to the pid alone and says so in `Reason`. Killing a job is `Stop-Process` through `Invoke-WinMeshCommand`; there is no `Stop-WinMeshProcess`.
 - **SSH is non-interactive** (`BatchMode=yes`) and does not manage keys, passwords or host-key policy; use `SshOptions` and `~/.ssh/config` for that.
 - **The firewall-scope guard is IPv4 only.** The lock-out check compares live WinRM sources with the new ranges as IPv4 CIDRs, and `Get-WinMeshFirewallScope` compares scopes by network prefix — a light check, not an exact comparison.
 - **The firewall rules touched are all enabled inbound rules whose local port is 5985**, on the target.
@@ -827,7 +871,7 @@ winmesh is at version 0.2.1. It is a small module meant to stay readable in one 
 | This README | the whole module: concepts, setup, usage, SSH transport, subnets, security, commands, config, gotchas, troubleshooting |
 | [docs/ssh-server-setup.md](docs/ssh-server-setup.md) | the optional Windows (Win32-OpenSSH) and Linux SSH-server installers, flags, firewall behaviour and verification |
 | [config/hosts.example.psd1](config/hosts.example.psd1) | annotated config template, including ZeroTier, LAN, SSH and Linux examples |
-| [docs/spec-agent-ergonomics-0.3.md](docs/spec-agent-ergonomics-0.3.md) | **proposal, not built:** what a non-interactive caller (script, CI job, agent) needs — native exit codes, file transfer, `-ScriptFile`, detached runs — with the measurements behind each |
+| [docs/spec-agent-ergonomics-0.3.md](docs/spec-agent-ergonomics-0.3.md) | what a non-interactive caller (script, CI job, agent) needs, with the measurement behind each item: exit codes, file transfer and detached runs are implemented in 0.3.0; `-ScriptFile` and two documentation items are still proposals |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | scope, coding conventions (each prevents a bug already hit), manual testing, commit rules |
 | `functions/` | one file per command (plus the platform and ssh helpers); `Invoke-WinMeshSsh.ps1` holds the ssh transport internals |
 | `scripts/windows/`, `scripts/linux/` | the standalone SSH-server installers |

@@ -53,6 +53,10 @@ Specific to the SSH transport (`functions/Invoke-WinMeshSsh.ps1`):
 - **Keep the ssh path free of Windows-only cmdlets.** `Test-NetConnection` is why the port probe uses `System.Net.Sockets.TcpClient` instead. A controller-side ssh call should not fail for reasons unrelated to the target.
 - **A scriptblock the module sends to a target must run on any of them** — Windows PowerShell 5.1, and `pwsh` on Windows, Linux or macOS. No `WindowsIdentity`, `$env:COMPUTERNAME` or `$IsWindows` without a platform branch; `[Environment]::MachineName` and `whoami` work everywhere.
 - **A native command writing to stderr must not become a terminating error.** `ssh` uses stderr for ordinary notices; set `$ErrorActionPreference = 'Continue'` around the call and read `$LASTEXITCODE`.
+- **The channel is line-based and the markers own their prefixes.** The payload reports the result (`@@WINMESH-OK@@`), a failure (`@@WINMESH-ERR@@`) and the scriptblock's `$LASTEXITCODE` (`@@WINMESH-XC@@`) as whole lines; every other line the target writes is passed through to the caller's host stream. A new fact to report is a new marker line, not a field inside the serialized result — changing the result's shape would change what every existing caller receives.
+- **Read `$LASTEXITCODE` on the line immediately after the call that produced it.** Any command in between overwrites it, including a seemingly harmless one. In a fresh `-EncodedCommand` session it starts as `$null`, which is how "no native command ran" is distinguished from "it returned 0".
+- **`scp` spells the port `-P`; `ssh` spells it `-p`.** Both argument builders take their settings from `Get-WinMeshSshSetting` so a file travels over the same port, as the same user, with the same options as a command. Do not resolve host settings a third time anywhere else.
+- **Do not trust a transfer's exit code.** `Copy-WinMeshItem` reads the size back from the destination because a transfer that dies mid-file can exit zero. If you add a copy path, verify it by an artifact the same way.
 
 ## Testing
 

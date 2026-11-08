@@ -1,8 +1,10 @@
 # Spec — winmesh 0.3: the non-interactive caller
 
-**Status:** proposal. Nothing here is implemented. Target version `0.3.0`.
-**Audience:** whoever implements this, and the owner, who has two design
-decisions to make (marked **Owner decision** below).
+**Status:** P1, P2 and P4 are implemented in `0.3.0`. P3 and P5 are still
+proposals; nothing in those sections exists.
+**Audience:** whoever implements the rest, and anyone asking why the implemented
+parts behave the way they do. The owner's two decisions are recorded in
+*What the owner decided*, at the end.
 
 ## The diagnosis in one sentence
 
@@ -429,9 +431,17 @@ section, not the file.** Three lines in `AGENTS.md`, nothing in the module.
    including the tri-state exit code in P1 and the transport asymmetry the owner
    chooses there.
 
-## Summary of what the owner has to decide
+## What the owner decided
 
-1. **P1 WinRM parity** — ssh-only switch (recommended), or wrap both transports
-   and lose `$using:` on WinRM.
-2. **P4 at all** — it is the only item that gives the module remote state. P1–P3
-   and P5 are additive and small; P4 is a feature with a surface of its own.
+Both questions were answered on 2026-11-08, and the answers are what `0.3.0`
+implements:
+
+1. **P1 WinRM parity** — the switch is **ssh-only**. Using `-ThrowOnNativeExit`
+   on a WinRM host raises an error naming the reason, so `$using:` keeps working
+   there and nobody loses a feature.
+2. **P4** — **wanted**, and built: `Start-WinMeshProcess` and
+   `Get-WinMeshProcess`.
+
+What is still open, in priority order: **P3** (`-ScriptFile`, trivial, removes a
+layer of quoting for a caller in another shell) and **P5** (two documentation
+changes that need no code).
