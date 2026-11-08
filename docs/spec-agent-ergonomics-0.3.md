@@ -133,8 +133,8 @@ $r = Invoke-WinMeshCommand workstation-01 { ninja -C build } -ResultEnvelope
 # $r.Host           — the host name
 ```
 
-Useful for a caller that wants to branch rather than catch. Mutually exclusive
-with `-ThrowOnNativeExit` is not necessary; both may be set.
+Useful for a caller that wants to branch rather than catch. Not mutually
+exclusive with `-ThrowOnNativeExit`; both may be set.
 
 ### Back-compat
 
@@ -362,10 +362,11 @@ exit code, confirm a non-zero exit is reported as non-zero.
 `CONTRIBUTING.md` says per-host ssh detail belongs in `~/.ssh/config` and that
 the module does not duplicate it. It already supports that, and it is not
 documented. **Measured** with a scratch config: an entry whose `Address` is an
-ssh-config alias, with `SshOptions = @()` and `SshPort = 22`, produced a working
-round trip — because an empty host-level `SshOptions` suppresses the defaults'
-`-o` injection and port 22 suppresses the `-p` flag, leaving `ssh <alias>` for
-the client to resolve.
+ssh-config alias, with `SshOptions = @()`, `SshPort = 22` and no `SshUser` at
+either level, produced a working round trip: an empty host-level `SshOptions`
+suppresses the defaults' `-o` injection, port 22 suppresses the `-p` flag, and
+with no user the target is the bare alias, leaving `ssh <alias>` for the client
+to resolve.
 
 ```powershell
 'workstation-01' = @{
@@ -373,6 +374,8 @@ the client to resolve.
     Transport  = 'ssh'
     SshPort    = 22                       # 22 = do not pass -p
     SshOptions = @()                      # empty = do not inject the defaults' -o options
+    # and no SshUser, here or in Defaults: a user at either level makes the
+    # target 'user@alias', which overrides the alias's own User directive.
 }
 ```
 
