@@ -1,4 +1,4 @@
-@{
+﻿@{
     # Defaults for every host. Any of these can be overridden per host.
     Defaults = @{
         Transport       = 'winrm'                       # 'winrm' or 'ssh'
