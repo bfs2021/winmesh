@@ -442,6 +442,8 @@ implements:
 2. **P4** — **wanted**, and built: `Start-WinMeshProcess` and
    `Get-WinMeshProcess`.
 
-What is still open, in priority order: **P3** (`-ScriptFile`, trivial, removes a
-layer of quoting for a caller in another shell) and **P5** (two documentation
-changes that need no code).
+What is still open from this document: **P3** (`-ScriptFile`) is issue #13, and
+**P5**'s two documentation changes are issues #14 and #15. Work this release
+added rather than closed — a test suite, a run timeout, job-file cleanup, the
+unverified WinRM copy path, macOS — is listed in issue #23, which is the place
+to look first.
