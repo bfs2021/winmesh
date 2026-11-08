@@ -25,12 +25,23 @@
 
     Arguments and the scriptblock body are themselves base64 inside the payload,
     so no quoting of user content is ever needed.
+
+      4. Exit codes. A scriptblock whose native command fails still returns
+         normally: PowerShell does not turn a non-zero exit into a terminating
+         error, and the code does not cross the channel. So the payload reads
+         `$LASTEXITCODE` right after the call and sends it on its own marker line;
+         -ThrowOnNativeExit turns a non-zero value into a local exception.
 #>
 
 # Marker lines the remote payload prints. Anything else the remote writes
 # (Write-Host, native command output) is passed through to the caller's host.
 $script:WinMeshSshOk  = '@@WINMESH-OK@@'
 $script:WinMeshSshErr = '@@WINMESH-ERR@@'
+# Carries $LASTEXITCODE of the scriptblock back to the controller. A separate
+# line, not a field in the result, so the serialized result stays byte-for-byte
+# what it was before this existed. Emitted on the success path only: after a
+# terminating error $LASTEXITCODE belongs to whatever ran before the throw.
+$script:WinMeshSshXc  = '@@WINMESH-XC@@'
 
 function ConvertTo-WinMeshB64 {
     param([Parameter(Mandatory)] [AllowEmptyString()] [string]$Text)
@@ -66,7 +77,10 @@ try {
     `$__sb = [scriptblock]::Create(
         [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$sbB64')))
     `$__r = & `$__sb @__args
+    # Read it on the very next line: any command run in between overwrites it.
+    `$__xc = `$LASTEXITCODE
     `$__x = [System.Management.Automation.PSSerializer]::Serialize(`$__r)
+    [Console]::Out.WriteLine('$($script:WinMeshSshXc)' + "`$__xc")
     [Console]::Out.WriteLine('$($script:WinMeshSshOk)' +
         [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(`$__x)))
 } catch {
@@ -108,7 +122,8 @@ function Invoke-WinMeshSsh {
         [Parameter(Mandatory)] $HostEntry,
         [Parameter(Mandatory)] $Defaults,
         [Parameter(Mandatory)] [scriptblock]$ScriptBlock,
-        [object[]]$ArgumentList
+        [object[]]$ArgumentList,
+        [switch]$ThrowOnNativeExit
     )
 
     $payload = New-WinMeshSshPayload -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
@@ -129,12 +144,16 @@ function Invoke-WinMeshSsh {
         $ErrorActionPreference = $prevEap
     }
 
-    $marker = $null
-    $noise  = New-Object System.Collections.Generic.List[string]
+    $marker   = $null
+    $exitText = $null
+    $noise    = New-Object System.Collections.Generic.List[string]
     foreach ($line in @($raw)) {
         $text = "$line"
         if ($text.StartsWith($script:WinMeshSshOk) -or $text.StartsWith($script:WinMeshSshErr)) {
             $marker = $text
+        } elseif ($text.StartsWith($script:WinMeshSshXc)) {
+            # Empty when no native command ran: $LASTEXITCODE was $null there.
+            $exitText = $text.Substring($script:WinMeshSshXc.Length).Trim()
         } elseif ($text.Trim()) {
             $noise.Add($text)
         }
@@ -161,6 +180,18 @@ function Invoke-WinMeshSsh {
         $msg = [System.Management.Automation.PSSerializer]::Deserialize(
             (ConvertFrom-WinMeshB64 -B64 $marker.Substring($script:WinMeshSshErr.Length)))
         throw "winmesh(ssh) $($HostEntry.Address): $msg"
+    }
+
+    # The exit code of the *last* native command in the scriptblock, and only
+    # that: `cmd /c "exit 7"` followed by `cmd /c "exit 0"` leaves 0. A caller
+    # that needs per-command strictness writes the check into its own block.
+    $nativeExit = $null
+    if ($exitText) {
+        $parsed = 0
+        if ([int]::TryParse($exitText, [ref]$parsed)) { $nativeExit = $parsed }
+    }
+    if ($ThrowOnNativeExit -and $null -ne $nativeExit -and $nativeExit -ne 0) {
+        throw "winmesh(ssh) $($HostEntry.Address): the last native command in the scriptblock exited with code $nativeExit."
     }
 
     [System.Management.Automation.PSSerializer]::Deserialize(
